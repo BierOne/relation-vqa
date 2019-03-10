@@ -7,10 +7,12 @@ import config
 
 
 class Net(nn.Module):
-    def __init__(self, embeddings=None):
+    def __init__(self, embeddings=None, act_fun='tanh'):
         super(Net, self).__init__()
-        question_features = 2048
+        question_features = 2400
         vision_features = config.output_features
+        share_features = 1200
+        joint_features = 1200
         drop_rate = 0.5
         self.tanh = nn.Tanh()
 
@@ -23,30 +25,30 @@ class Net(nn.Module):
 
         self.image_encode = FeatureMapper(
             in_features=vision_features,
-            mid_features=
-            out_features=
+            mid_features=share_features,
+            out_features=joint_features,
             drop=drop_rate
         )
         self.text_encode = FeatureMapper(
             in_features=question_features,
-            mid_features=
-            out_features=
+            mid_features=share_features,
+            out_features=joint_features,
             drop=drop_rate
         )
         
         self.sub_classifier = Classifier(
-            in_features=
-            num_classes=2000,
+            in_features=joint_features,
+            num_classes=2000+1,
             drop=drop_rate
         )
         self.rel_classifier = Classifier(
-            in_features=
-            num_classes=256,
+            in_features=joint_features,
+            num_classes=256+1,
             drop=drop_rate
         )
         self.obj_classifier = Classifier(
-            in_features=
-            num_classes=2000,
+            in_features=joint_features,
+            num_classes=2000+1,
             drop=drop_rate
         )
 
@@ -124,7 +126,8 @@ class Glove(nn.Module):
         embedding_dim = weights.shape[1]
         weights = torch.tensor(weights)
 
-        self.embeddings = nn.Embedding(num_embeddings, embedding_dim).cuda()
+        self.embeddings = nn.Embedding(
+            num_embeddings, embedding_dim, padding_idx=0)
         self.embeddings.load_state_dict({'weight': weights})
         if not fine_tune:
             self.embeddings.weight.requires_grad = False

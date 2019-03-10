@@ -25,9 +25,13 @@ def run(net, loader, tracker, optimizer,
     else:
         net.eval()
         tracker_class, tracker_params = tracker.MeanMonitor, {}
-        recall_1, recall_5, recall_10 = [], [], []
+        top_1_sub, top_1_rel, top_1_obj = [], [], []
+        top_5_sub, top_5_rel, top_5_obj = [], [], []
+        top_10_sub, top_10_rel, top_10_obj = [], [], []
+        gt_sub, gt_rel, gt_obj = [], [], []
 
-    loader = tqdm(loader, desc='{} E{:03d}'.format(prefix, epoch), ncols=7)
+
+    loader = tqdm(loader, desc='{} E{:03d}'.format(prefix, epoch))
 
     loss_t_all = tracker.track('{}_loss_all'.format(prefix), tracker_class(**tracker_params))
     loss_t_sub = tracker.track('{}_loss_sub'.format(prefix), tracker_class(**tracker_params))
@@ -38,7 +42,7 @@ def run(net, loader, tracker, optimizer,
     acc_t_rel = tracker.track('{}_acc_rel'.format(prefix), tracker_class(**tracker_params))
     acc_t_obj = tracker.track('{}_acc_obj'.format(prefix), tracker_class(**tracker_params))
 
-    for idx, v, q, rel, rel_sub, rel_rel, rel_obj, q_len in loader:
+    for v, q, rel, rel_sub, rel_rel, rel_obj, q_len in loader:
         v = v.cuda(async=True)
         q = q.cuda(async=True)
         rel_sub = rel_sub.cuda(async=True)
@@ -64,9 +68,19 @@ def run(net, loader, tracker, optimizer,
             optimizer.step()
         else:
             # store information about evaluation of this minibatch
-            recall_1.append(utils.batch_recall())
-            recall_5.append(utils.batch_recall())
-            recall_10.append(utils.batch_recall())
+            top_1_sub.append(sub_prob.topk(1)[1])
+            top_1_rel.append(rel_prob.topk(1)[1])
+            top_1_obj.append(obj_prob.topk(1)[1])
+            top_5_sub.append(sub_prob.topk(5)[1])
+            top_5_rel.append(rel_prob.topk(5)[1])
+            top_5_obj.append(obj_prob.topk(5)[1])
+            top_10_sub.append(sub_prob.topk(10)[1])
+            top_10_rel.append(rel_prob.topk(10)[1])
+            top_10_obj.append(obj_prob.topk(10)[1])
+            gt_sub.append(rel_sub.view(-1, 1))
+            gt_rel.append(rel_rel.view(-1, 1))
+            gt_obj.append(rel_obj.view(-1, 1))
+
         
         loss_t_all.append(loss_all.item())
         loss_t_sub.append(loss_sub.item())
@@ -81,14 +95,30 @@ def run(net, loader, tracker, optimizer,
         loader.set_postfix(
             loss_all=fmt(loss_t_all.mean.value),
             loss_sub=fmt(loss_t_sub.mean.value), acc_sub=fmt(acc_t_sub.mean.value),
-            loss_rel=fmt(loss_t_rel.mean.value), acc_sub=fmt(acc_t_rel.mean.value),
-            loss_obj=fmt(loss_t_obj.mean.value), acc_sub=fmt(acc_t_obj.mean.value)
+            loss_rel=fmt(loss_t_rel.mean.value), acc_rel=fmt(acc_t_rel.mean.value),
+            loss_obj=fmt(loss_t_obj.mean.value), acc_obj=fmt(acc_t_obj.mean.value)
         )
 
     if not train:
-        recall_1 = torch.cat(recall_1, dim=0).numpy().mean()
-        recall_5 = torch.cat(recall_5, dim=0).numpy().mean()
-        recall_10 = torch.cat(recall_10, dim=0).numpy().mean()
+        top_1_sub = torch.cat(top_1_sub, dim=0).cpu().numpy()
+        top_1_rel = torch.cat(top_1_rel, dim=0).cpu().numpy()
+        top_1_obj = torch.cat(top_1_obj, dim=0).cpu().numpy()
+        top_5_sub = torch.cat(top_5_sub, dim=0).cpu().numpy()
+        top_5_rel = torch.cat(top_5_rel, dim=0).cpu().numpy()
+        top_5_obj = torch.cat(top_5_obj, dim=0).cpu().numpy()
+        top_10_sub = torch.cat(top_10_sub, dim=0).cpu().numpy()
+        top_10_rel = torch.cat(top_10_rel, dim=0).cpu().numpy()
+        top_10_obj = torch.cat(top_10_obj, dim=0).cpu().numpy()
+        gt_sub = torch.cat(gt_sub, dim=0).cpu().numpy()
+        gt_rel = torch.cat(gt_rel, dim=0).cpu().numpy()
+        gt_obj = torch.cat(gt_obj, dim=0).cpu().numpy()
+
+        recall_1 = utils.recall(gt_sub, gt_rel, gt_obj,
+                                top_1_sub, top_1_rel, top_1_obj)
+        recall_5 = utils.recall(gt_sub, gt_rel, gt_obj,
+                                top_5_sub, top_5_rel, top_5_obj)
+        recall_10 = utils.recall(gt_sub, gt_rel, gt_obj,
+                                top_10_sub, top_10_rel, top_10_obj)      
         return recall_1, recall_5, recall_10
 
 
@@ -119,14 +149,16 @@ def main():
         print('will save to {}'.format(target_name))
 
     ######################################### DATASET PREPARATION #################################### 
+    with open(config.meta_data_path, 'r') as fd:
+        meta_data = json.load(fd)
     if args.test_only:
-        val_loader = data.get_loader(split='test')
+        val_loader = data.get_loader('test', meta_data)
     else:
-        train_loader = data.get_loader(split='train')
+        train_loader = data.get_loader('train', meta_data)
         if config.train_set == 'train':
-            val_loader = data.get_loader(split='val')
+            val_loader = data.get_loader('val', meta_data)
         if config.train_set == 'train+val':
-            val_loader = data.get_loader(split='test')
+            val_loader = data.get_loader('test', meta_data)
 
     ########################################## MODEL PREPARATION #####################################
     embeddings = bcolz.open(config.glove_path_filtered)[:]
@@ -138,7 +170,7 @@ def main():
         [p for p in net.parameters() if p.requires_grad], 
         lr=config.initial_lr,
         momentum=0.98,
-        weight_decay=0.01
+        weight_decay=1e-7
     )
 
     start_epoch = 0
@@ -151,14 +183,14 @@ def main():
 
     for i in range(start_epoch, config.epochs):
         if not args.test_only:
-            run(net, train_loader, tracker, optimizer, scheduler, 
-                                loss_tracker=loss, train=True, prefix='train', epoch=i)
+            run(net, train_loader, tracker, optimizer, 
+                scheduler=None, loss_criterion=loss, train=True, prefix='train', epoch=i)
         if config.train_set=='train' or (
             not config.train_set == 'train' and i in range(config.epochs-5, config.epochs)):
-            r = run(net, val_loader, tracker, optimizer, scheduler, 
-                                loss_tracker=loss, train=False, prefix='val', epoch=i)
-            print("Valid epoch {}: recall@1 is {}, recall@5 is {}, recall@10 is".format(
-                                                                        i, r[0], r[1], r[2]))
+            r = run(net, val_loader, tracker, optimizer, 
+                scheduler=None, loss_criterion=loss, train=False, prefix='val', epoch=i)
+            print("Valid epoch {}: recall@1 is {:.4f}, recall@5 is {:.4f}, \
+                                    recall@10 is {:.4f}".format(i, r[0], r[1], r[2]))
 
         if not args.test_only:
             results = {

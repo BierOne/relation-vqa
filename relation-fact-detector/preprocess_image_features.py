@@ -18,7 +18,7 @@ def main():
     FIELDNAMES = ['image_id', 'image_w','image_h','num_boxes', 'boxes', 'features']
 
     features_shape = (
-        108077,  # number of images 
+        108080,  # number of images 
         config.output_features,
         config.output_size,
     )

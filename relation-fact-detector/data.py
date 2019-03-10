@@ -1,15 +1,14 @@
-import json
+import os, json
 import h5py
-import numpy as np
 import torch
 import torch.utils.data as data
 
 import config
 
 
-def get_loader(split):
+def get_loader(split, meta_data):
 	""" Returns a data loader for the desired split """   
-	splits = FactData(split)
+	splits = FactData(split, meta_data)
 	loader = torch.utils.data.DataLoader(
 		splits,
 		batch_size=config.batch_size,
@@ -28,31 +27,41 @@ def collate_fn(batch):
 
 class FactData(data.Dataset):
 	""" Relation Fact Detector dataset. """
-	def __init__(self, split):
+	def __init__(self, split, meta_data):
 		super(FactData, self).__init__()
-		with open(config.meta_data_path, 'r') as fd:
-			self.meta_data = json.load(fd)
+		self.meta_data = meta_data
 
-		# choose right split idxs
+		# choose right split path
 		if split == 'train':
 			if config.train_set == 'train':
-				self.splits = self.meta_data['train_ids']
+				splits_path = os.path.join(
+						config.raw_data_path, 'vqa_raw_train_0.30.json')
 			elif config.train_set == 'train+val':
-				self.splits = self.meta_data['train_ids'] +self.meta_data['dev_ids']
+				splits_path = os.path.join(
+						config.raw_data_path, 'vqa_raw_train_val_0.30.json')
 			else: # all the index should be used
-				self.splits = [i for i in range(len(self.meta_data['image_ids']))]
+				splits_path = os.path.join(
+						config.raw_data_path, 'vqa-rel_map_result_0.30.json')
 		if split == 'val':
-			self.splits = self.meta_data['dev_ids']
+			splits_path = os.path.join(
+						config.raw_data_path, 'vqa_raw_val_0.30.json')
 		if split == 'test':
-			self.splits = self.meta_data['test_ids']
+			splits_path = os.path.join(
+						config.raw_data_path, 'vqa_raw_test_0.30.json')
+
+		with open(splits_path, 'r') as fd:
+			splits = json.load(fd)
+		self.question_ids = [i['question_id'] for i in splits]
+		self.question_ids = [q_id 
+			for q_id in self.question_ids if q_id in self.meta_data]
 
 		# image
 		self.image_features_path = config.image_features_path
 		self.vg_id_to_index = self._create_vg_id_to_index()
 
 		# question
-		self.questions = self.meta_data['word_ids']
-		self.questions = [self._encode_question(q) for q in self.questions]
+		self.questions = [self._encode_question(
+			self.meta_data[q_id]['word_id']) for q_id in self.question_ids]
 
 	def _encode_question(self, question):
 		""" Turn a question into a vector of indices and a question length """
@@ -63,7 +72,8 @@ class FactData(data.Dataset):
 		return vec, min(len(question), config.max_question_len)
 
 	def _create_vg_id_to_index(self):
-		""" Create a mapping from a VG image id into the corresponding index into the h5 file """
+		""" Create a mapping from a VG image id into the 
+			orresponding index into the h5 file """
 		with h5py.File(self.image_features_path, 'r') as features_file:
 			vg_ids = features_file['ids'][()]
 		vg_id_to_index = {id: i for i, id in enumerate(vg_ids)}
@@ -72,9 +82,6 @@ class FactData(data.Dataset):
 	def _load_image(self, image_id):
 		""" Load an image from disk. """
 		if not hasattr(self, 'features_file'):
-			# Loading the h5 file has to be done here and not in __init__ because when the DataLoader
-			# forks for multiple works, every child would use the same file object and fail.
-			# Having multiple readers using different file objects is fine though, so we just init in here.
 			self.features_file = h5py.File(self.image_features_path, 'r')
 		index = self.vg_id_to_index[image_id]
 		img = self.features_file['features'][index]
@@ -82,18 +89,18 @@ class FactData(data.Dataset):
 		return torch.from_numpy(img), torch.from_numpy(boxes)
 
 	def __getitem__(self, item):
-		idx = self.splits[item]
+		q_id = self.question_ids[item]
+		sample = self.meta_data[q_id]
 
-		image_id = int(self.meta_data['image_ids'][idx])
-		question, question_len = self.questions[idx]
-		relation_id = int(self.meta_data['relation_ids'][idx])
-		relation_sub_id = self.meta_data['relation_sub_ids'][idx]
-		relation_rel_id = self.meta_data['relation_rel_ids'][idx]
-		relation_obj_id = self.meta_data['relation_obj_ids'][idx]
+		image_id = int(sample['image_id'])
+		q, q_len = self.questions[item]
+		r_id = sample['relation_id']
+		r_sub_id = sample['sub_id']
+		r_rel_id = sample['rel_id']
+		r_obj_id = sample['obj_id']
 
 		v, b = self._load_image(image_id)
-		return (idx, v, question, relation_id, 
-				relation_sub_id, relation_rel_id, relation_obj_id, question_len)
+		return v, q, r_id, r_sub_id, r_rel_id, r_obj_id, q_len
 
 	def __len__(self):
-		return len(self.splits)
+		return len(self.question_ids)

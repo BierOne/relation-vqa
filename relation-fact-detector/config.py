@@ -1,11 +1,15 @@
 # training set ('train', 'train+val' or 'all')
 train_set = 'train'
 
+merge = True # merge relations or not
+
 # paths
 data_path = '../data/'
+raw_data_path = data_path + 'raw_rvqa_data/'
 glove_path = data_path
 glove_path_filtered = glove_path + 'glove_filter'
 meta_data_path = data_path + 'meta_data.json'
+vocab_path = data_path + 'vocabs.json'
 bottom_up_path = data_path + 'VG100K'
 image_features_path = data_path + 'VG.h5'
 
@@ -21,7 +25,7 @@ lamda_rel = 0.8
 lamda_obj = 1.2
 
 # training config
-epochs = 100
+epochs = 35
 batch_size = 100
 initial_lr = 3e-4
 data_workers = 1

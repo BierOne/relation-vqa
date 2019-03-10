@@ -1,4 +1,5 @@
 import re
+import numpy as np
 from nltk.tokenize import TweetTokenizer
 
 
@@ -6,6 +7,21 @@ def batch_accuracy(predicted, true):
     """ Compute the accuracies for a batch of predictions and truths. """
     _, predicted_index = predicted.max(dim=1)  
     return predicted_index.eq(true).float()
+
+
+def recall(gt_sub, gt_rel, gt_obj, top_sub, top_rel, top_obj):
+	""" The possibility of a predicted fact is the sum of probabilities
+		of the subject, relation, and object. 
+	"""
+	r = []
+	for idx in range(len(gt_sub)):
+		if gt_sub[idx] in top_sub[idx] \
+		and gt_rel[idx] in top_rel[idx] \
+		and gt_obj[idx] in top_obj[idx]:
+			r.append(1.0)
+		else:
+			r.append(0.0)
+	return np.array(r).mean()
 
 
 # this is used for normalizing questions
@@ -87,4 +103,3 @@ class Tracker:
 			else:
 				m = self.momentum
 				self.value = m * self.value + (1 - m) * value
-				
