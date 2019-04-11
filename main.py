@@ -15,7 +15,6 @@ import utils.config as config
 import utils.data as data
 import utils.utils as utils
 import model.model as model
-# import detector.model as detector
 
 def run(net, loader, optimizer, scheduler, tracker, train=False, has_answers=True, prefix='', epoch=0):
 	""" Run an epoch over the given loader """
@@ -39,19 +38,8 @@ def run(net, loader, optimizer, scheduler, tracker, train=False, has_answers=Tru
 		a = a.cuda(async=True)
 		b = b.cuda(async=True)
 		f = f.cuda(async=True)
+		q = q.cuda(async=True)
 		
-		if config.pretrained_model == 'bert':
-			q_ids = q.cuda(async=True)
-			q_mask = q_dummy.cuda(async=True)
-			q = (q_ids, q_mask)
-		else:
-			q = q.cuda(async=True)
-		# sub_prob, rel_prob, obj_prob = detector(v.squeeze(2), q, 0, 0, 0, q_len)
-		# top_10_sub = sub_prob.topk(10)[1]
-		# top_10_rel = rel_prob.topk(10)[1]
-		# top_10_obj = obj_prob.topk(10)[1]
-		# top_10_fact = torch.cat((top_10_sub, top_10_rel, top_10_obj), dim=1).view(-1,                        3,10).transpose(1,2)
-		# top_10_fact = torch.randint(500,(v.shape[0], 10, 3))
 		out = net(v, b, q, f, q_len)
 		if has_answers:
 			# print(out.shape, a.shape)
@@ -114,7 +102,7 @@ def main():
 	parser.add_argument('--resume', action='store_true', help='resumed flag')
 	parser.add_argument('--test', dest='test_only', default=False, action='store_true')
 	parser.add_argument('--detctor', default='2019-03-16_10:28:52{}.pth', help='the name of detector')
-	parser.add_argument('--gpu', default='7', help='the chosen gpu id')
+	parser.add_argument('--gpu', default='3', help='the chosen gpu id')
 	args = parser.parse_args()
 
 
@@ -149,18 +137,8 @@ def main():
 		train_loader = data.get_loader(train=True, val=True)
 		val_loader = data.get_loader(test=True)
 	########################################## MODEL PREPARATION ########################################
-	fact_embedding = bcolz.open(config.detector_glove_path_filtered)[:] 
-	# detector_path = os.path.join(config.detector_path,args.detctor) 
-	# detector_logs = torch.load(detector_path)
-	# detector_net = detector.Net(fact_embedding).cuda()
-	# detector_net.load_state_dict(detector_logs['weights'])
-	# detector_net.eval()
-	
-	# if config.pretrained_model == 'glove':
-		# embedding = bcolz.open(config.glove_path_filtered)[:] 
-	# else:
-		# embedding = len(val_loader.dataset.token_to_index)
-	net = model.Net(fact_embedding)
+	embedding = bcolz.open(config.glove_path_filtered)[:] 
+	net = model.RelAtt(embedding)
 	net = nn.DataParallel(net).cuda()
 	
 	optimizer = optim.Adam([p for p in net.parameters() if p.requires_grad], 
@@ -177,14 +155,17 @@ def main():
 	scheduler = lr_scheduler.ExponentialLR(optimizer, 0.5**(1 / 50000))
 	######################################### 
 	#######################################
+	acc_val_best = 0.0
 	start_epoch = 0
 	if args.resume:
-		net.load_state_dict(logs['weights'])
+		net.load_state_dict(logs['model_state'])
+		optimizer.load_state_dict(logs['optim_state'])
+		scheduler.load_state_dict(logs['scheduler_state'])
 		start_epoch = logs['epoch']
+		acc_val_best = logs['acc_val_best']
 
 	tracker = utils.Tracker()
-	acc_val_best = 0.0
-
+	r = np.zeros(3)
 	for i in range(start_epoch, config.epochs):
 		if not args.test_only:
 			run(net, train_loader, optimizer, scheduler, tracker, train=True, prefix='train', epoch=i)
@@ -192,11 +173,14 @@ def main():
 			r = run(net, val_loader, optimizer, scheduler, tracker, train=False, 
 					prefix='val', epoch=i, has_answers=(config.train_set == 'train'))
 
-		if not args.test_only:
+		if not args.test_only :
 			results = {
 				'epoch': i,
+				'acc_val_best': acc_val_best,
 				'name': name,
-				'weights': net.state_dict(),
+				'model_state': net.state_dict(),
+				'optim_state': optimizer.state_dict(),
+				'scheduler_state': scheduler.state_dict(),
 				'eval': {
 					'answers': r[0],
 					'accuracies': r[1],

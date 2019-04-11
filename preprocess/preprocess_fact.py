@@ -15,17 +15,12 @@ sys.path.append(os.getcwd())
 import utils.config as config
 import utils.fact_data as data
 import utils.utils as utils
-import model.model as model
 import detector.model.model as detector
 
 def run(detector, loader, tracker, prefix='extract', epoch=0, top=10):
 	""" Run an epoch over the given loader """
 	# assert not (train and not has_answers)
-	facts = []
-	idxs = []
-	subs = []
-	objs = []
-	rels = []
+	facts, idxs, subs, objs, rels = [], [], [], [], []
 	fmt = '{:.4f}'.format
 	tracker_class, tracker_params = tracker.MeanMonitor, {}
 	loader = tqdm(loader, desc='{}'.format(prefix), ncols=0)
@@ -57,7 +52,6 @@ def run(detector, loader, tracker, prefix='extract', epoch=0, top=10):
 		facts.append(top_10_fact.cpu())
 		idxs.append(idx.view(-1).clone())
 		
-
 		loader.set_postfix(unk_sub=fmt(unk_t_sub.mean.value), 
 		unk_rel=fmt(unk_t_rel.mean.value), unk_obj=fmt(unk_t_obj.mean.value) )
 		# break
@@ -70,7 +64,7 @@ def run(detector, loader, tracker, prefix='extract', epoch=0, top=10):
 def saved_for_test(test_loader, result, split='train'):
 	""" in test mode, save a facts file in the format accepted by the submission server. """
 	facts = {}
-	with open(config.fact_vocab_path, 'r') as fd:
+	with open(config.vocab_path, 'r') as fd:
 		vocab_data = json.load(fd)
 	sub_index_to_string = {i: s for s, i in vocab_data['subs'].items()}
 	rel_index_to_string = {i: s for s, i in vocab_data['rels'].items()}
@@ -78,9 +72,11 @@ def saved_for_test(test_loader, result, split='train'):
 	(sub_index_to_string[0], rel_index_to_string[0], obj_index_to_string[0]) = ('unk', 'unk', 'unk')
 	question_ids = test_loader.dataset.question_ids
 	# assert(len(result[0]) == len(question_ids))
-	result_file = '{}_{}2014_facts'.format(config.dataset, split)
+	result_file = '{}_{}_facts'.format(config.dataset, split)
+	if config.version == 'v2':
+		result_file = 'v2_' + result_file
 	result_file = os.path.join(config.fact_path, result_file)
-	with h5py.File('{}.hdf5'.format(result_file),"w") as f:
+	with h5py.File('{}.h5'.format(result_file),"w") as f:
 		subs = f.create_dataset("subs",data=result[1])
 		objs = f.create_dataset("objs",data=result[3])
 		rels = f.create_dataset("rels",data=result[2])
@@ -102,29 +98,27 @@ def saved_for_test(test_loader, result, split='train'):
 
 def main():
 	parser = argparse.ArgumentParser()
-	# parser.add_argument('--split', default='train', help='train/val/test-dev2015/test2015')
-	# parser.add_argument('--detctor', default='2019-03-13_20:05:11.pth', help='the name of detector')
-	parser.add_argument('--detctor', default='2019-03-16_10:28:52{}.pth', help='the name of detector')
+	parser.add_argument('--name', default='2019-03-16_10:28:52{}.pth', help='the name of detector')
 	parser.add_argument('--gpu', default='6', help='the chosen gpu id')
 	args = parser.parse_args()
 	os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 	cudnn.benchmark = True
 	########################################## MODEL PREPARATION ########################################
-	embedding = bcolz.open(config.detector_glove_path_filtered)[:] 
-	detector_path = os.path.join(config.detector_path,args.detctor) 
+	embedding = bcolz.open(config.glove_path_filtered)[:] 
+	detector_path = os.path.join('detector/logs/',args.name) 
 	detector_logs = torch.load(detector_path)
 	detector_net = detector.Net(embedding).cuda()
 	detector_net.load_state_dict(detector_logs['weights'])
 	detector_net.eval()
 	######################################### DATASET PREPARATION #######################################
-	split = [ 'test-dev2015', 'test2015', 'train', 'val']
+	split = [ 'test-dev2015', 'train2014', 'val2014', 'test2015']
 	# split = ['test-dev2015', 'test2015']
 	
 	tracker = utils.Tracker()
 	for set in split:
-		if set == 'train':
+		if set == 'train2014':
 			val_loader = data.get_loader(train=True)
-		elif set == 'val':
+		elif set == 'val2014':
 			val_loader = data.get_loader(val=True)
 		elif set == 'trainval':
 			val_loader = data.get_loader(train=True, val=True)

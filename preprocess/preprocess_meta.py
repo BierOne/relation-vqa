@@ -7,7 +7,7 @@ from collections import Counter
 sys.path.append(os.getcwd())
 import utils.utils as utils
 import utils.data as data
-import detector.utils.config as config
+import utils.config as config
 
 
 def _get_file_(train=False, val=False, test=False, question=False, answer=False, version=config.version, qa_path=config.qa_path):
@@ -150,7 +150,7 @@ def main():
 	questions_val = _get_file_(val=True, question=True)
 	questions_test = _get_file_(test=True, question=True)
 	
-	vqa2_qa_path = config.main_path+'../vqa/vqa2.0/qa_path/'
+	vqa2_qa_path =  os.path.join(config.main_path, 'vqa2.0/qa_path/')
 	v2_questions_train = _get_file_(train=True, question=True, version='v2', qa_path=vqa2_qa_path)
 	v2_questions_val = _get_file_(val=True, question=True, version='v2', qa_path=vqa2_qa_path)
 	v2_questions_test = _get_file_(test=True, question=True, version='v2', qa_path=vqa2_qa_path)

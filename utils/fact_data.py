@@ -1,7 +1,5 @@
 import os, re
 import json, h5py
-import numpy as np
-
 import torch
 import torch.utils.data as data
 
@@ -9,7 +7,6 @@ import utils.config as config
 import utils.utils as utils
 from model.pretrained_models import Bert
 from vqa_eval.PythonEvaluationTools.vqaEvaluation.vqaEval import VQAEval
-
 
 preloaded_vocab = None
 # monkey-patch ConcatDataset so that it delegates member access, e.g. VQA(...).num_tokens
@@ -58,17 +55,13 @@ class VQA(data.Dataset):
 			questions_json = json.load(fd)
 
 		with open(config.fact_vocab_path, 'r') as fd:
-			fact_vocab_json = json.load(fd)
+			vocab_json = json.load(fd)
 
 		# self._check_integrity(questions_json, answers_json)
 		self.question_ids = [q['question_id'] for q in questions_json['questions']]
-		# print(len(self.question_ids), len(facts_json))
-		# self.facts = [facts_json[str(qid)]['fact_index'] for qid in self.question_ids]
 		# vocab
-		# self.vocab = vocab_json
-		self.token_to_index = fact_vocab_json['question']
-		# self.answer_to_index = self.vocab['answer']
-
+		self.vocab = vocab_json
+		self.token_to_index = self.vocab['question']
 		# q and a
 		self.questions = list(prepare_questions(questions_json))
 		if config.pretrained_model == 'bert':
@@ -77,20 +70,10 @@ class VQA(data.Dataset):
 		else:
 			self.questions = [self._encode_question(
 							utils.tokenize_text(q)) for q in self.questions]
-
-		# self.answers = list(prepare_answers(answers_json))
-		# self.answers = [self._encode_answers(a) for a in self.answers]
-
 		# v
 		self.image_features_path = image_features_path
 		self.coco_id_to_index = self._create_coco_id_to_index()
 		self.coco_ids = [q['image_id'] for q in questions_json['questions']]
-
-
-		# only use questions that have at least one answer
-		# self.answerable_only = answerable_only
-		# if self.answerable_only:
-			# self.answerable = self._find_answerable()
 
 	def _create_coco_id_to_index(self):
 		""" Create a mapping from a COCO image id into the corresponding index into the h5 file """
@@ -132,12 +115,8 @@ class VQA(data.Dataset):
 
 	def __getitem__(self, item):
 			# just return a dummy answer, it's not going to be used anyway
-		# f = self.facts[item] # f -> 10x3
 		image_id = self.coco_ids[item]
 		v, b = self._load_image(image_id)
-		# since batches are re-ordered for PackedSequence's, the original question order is lost
-		# we return `item` so that the order of (v, q, a) triples can be restored if desired
-		# without shuffling in the dataloader, these will be in the order that they appear in the q and a json's.
 		if config.pretrained_model == 'bert':
 			q_ids, q_mask = self.questions[item]
 			return item, v, q_ids, q_mask, b,  config.max_question_len+2
@@ -147,7 +126,6 @@ class VQA(data.Dataset):
 
 	def __len__(self):
 		return len(self.questions)
-
 
 # this is used for normalizing questions
 _special_chars = re.compile('(\'+s)*[^a-z0-9- ]*')

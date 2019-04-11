@@ -1,15 +1,13 @@
 import os, re
 import json, h5py
-import numpy as np
+from PIL import Image
 
 import torch
 import torch.utils.data as data
 
 import utils.config as config
 import utils.utils as utils
-from model.pretrained_models import Bert
 from vqa_eval.PythonEvaluationTools.vqaEvaluation.vqaEval import VQAEval
-
 
 preloaded_vocab = None
 # monkey-patch ConcatDataset so that it delegates member access, e.g. VQA(...).num_tokens
@@ -22,11 +20,15 @@ def get_loader(train=False, val=False, test=False):
 		val = False
 	else:
 		do_val_later = False
+	trainval_path = config.rcnn_trainval_path if config.image_feature == 'rcnn' \
+				else config.grid_trainval_path
+	test_path = config.rcnn_test_path if config.image_feature == 'rcnn' \
+				else config.grid_test_path
 	split = VQA(
 		utils.path_for(train=train, val=val, test=test, question=True),
 		utils.path_for(train=train, val=val, test=test, answer=True),
-		utils.path_for(train=train, val=val, test=test, fact=True),
-		config.preprocessed_trainval_path if not test else config.preprocessed_test_path,
+		utils.path_for(train=train, val=val, test=test, knowledge=True),
+		trainval_path if not test else test_path,
 		answerable_only=train,
 		dummy_answers=test,
 	)
@@ -36,8 +38,8 @@ def get_loader(train=False, val=False, test=False):
 		split += VQA(
 			utils.path_for(train=train, val=val, test=test, question=True),
 			utils.path_for(train=train, val=val, test=test, answer=True),
-			utils.path_for(train=train, val=val, test=test, fact=True),
-			config.preprocessed_trainval_path if not test else config.preprocessed_test_path,
+			utils.path_for(train=train, val=val, test=test, knowledge=True),
+			trainval_path if not test else test_path,
 			answerable_only=val,
 			dummy_answers=test,
 		)
@@ -58,7 +60,7 @@ def collate_fn(batch):
 
 class VQA(data.Dataset):
 	""" VQA dataset, open-ended """
-	def __init__(self, questions_path, answers_path, fact_path, image_features_path,
+	def __init__(self, questions_path, answers_path, knowledge_path, image_features_path,
 								answerable_only=False, dummy_answers=False):
 		super(VQA, self).__init__()
 
@@ -66,18 +68,28 @@ class VQA(data.Dataset):
 			questions_json = json.load(fd)
 		with open(answers_path, 'r') as fd:
 			answers_json = json.load(fd)
-		with open(fact_path, 'r') as fd:
-			facts_json = json.load(fd)
+		# with open(fact_path, 'r') as fd:
+			# facts_json = json.load(fd)
 		if preloaded_vocab:
 			vocab_json = preloaded_vocab
 		else:
-			with open(config.vqa_vocabulary_path, 'r') as fd:
+			with open(config.vocab_path, 'r') as fd:
 				vocab_json = json.load(fd)
 
 		# self._check_integrity(questions_json, answers_json)
 		self.question_ids = [q['question_id'] for q in questions_json['questions']]
-		print(len(self.question_ids), len(facts_json))
-		self.facts = torch.tensor([facts_json[str(qid)]['fact_index'] for qid in self.question_ids])
+		
+		# self.facts = torch.tensor([facts_json[str(qid)]['fact_index'] for qid in self.question_ids])
+		if not dummy_answers:
+			self.question_types = [a['question_type'] for a in answers_json['annotations']]
+			# self.invalid_type = ['how many', 'is the', 'is this', 'is this a', \
+				# 'is there a', 'is it', 'is there', 'does the', 'are these', 'are there',\
+				# 'is', 'is the man' , 'are', 'does this', 'how many people are', 'do', \
+				# 'are they', 'what time', 'are there any', 'is he', 'is the woman', \
+				# 'is this an', 'do you', 'how many people are in', 'has', 'is this person', \
+				# 'can you', 'is the person', 'could', 'was', 'is that a', 'what number is']
+			self.invalid_type = []
+			self.knowledges = self._encode_knowledge(knowledge_path)
 		# vocab
 		self.vocab = vocab_json
 		self.token_to_index = self.vocab['question']
@@ -85,12 +97,7 @@ class VQA(data.Dataset):
 
 		# q and a
 		self.questions = list(prepare_questions(questions_json))
-		if config.pretrained_model == 'bert':
-			bert_model = Bert(config.bert_model, config.max_question_len, True)
-			self.questions = [bert_model.tokenize_text(q) for q in self.questions]
-		else:
-			self.questions = [self._encode_question(
-							utils.tokenize_text(q)) for q in self.questions]
+		self.questions = [self._encode_question(utils.tokenize_text(q)) for q in self.questions]
 
 		self.answers = list(prepare_answers(answers_json))
 		self.answers = [self._encode_answers(a) for a in self.answers]
@@ -141,6 +148,25 @@ class VQA(data.Dataset):
 				vec[i] = index
 		return vec, min(len(question), config.max_question_len)
 
+	def _encode_knowledge(self, knowledge_path, topk=10):
+		""" Encode all the knowledge extracted from r-vqa here. """
+		with h5py.File(knowledge_path, 'r') as fd:
+			q_id_dict = {q_id: idx for idx, q_id in enumerate(fd['qids'])}
+			# print(len(q_id_dict), len(self.question_ids))
+			knowledges = []
+			for q_id in self.question_ids:
+				idx = q_id_dict[q_id]
+				if self.question_types[idx] not in self.invalid_type:
+					knowledges.append(
+						(torch.from_numpy(fd['subs'][idx][:topk]),
+						torch.from_numpy(fd['rels'][idx][:topk]),
+						torch.from_numpy(fd['objs'][idx][:topk])))
+				else:
+					knowledges.append((torch.zeros(topk, dtype=torch.int64), 
+										torch.zeros(topk, dtype=torch.int64), 
+										torch.zeros(topk, dtype=torch.int64)))
+			return knowledges
+			
 	def _encode_answers(self, answers):
 		""" Turn an answer into a vector """
 		# answer vec will be a vector of answer counts to determine which answers will contribute to the loss.
@@ -173,18 +199,14 @@ class VQA(data.Dataset):
 		else:
 			# just return a dummy answer, it's not going to be used anyway
 			a = 0
-		f = self.facts[item] # f -> 10x3
+		f = torch.tensor(self.knowledges[item]) # f -> 10x3
 		image_id = self.coco_ids[item]
 		v, b = self._load_image(image_id)
 		# since batches are re-ordered for PackedSequence's, the original question order is lost
 		# we return `item` so that the order of (v, q, a) triples can be restored if desired
 		# without shuffling in the dataloader, these will be in the order that they appear in the q and a json's.
-		if config.pretrained_model == 'bert':
-			q_ids, q_mask = self.questions[item]
-			return item, v, q_ids, q_mask, a, b, f, config.max_question_len+2
-		else:
-			q, q_len = self.questions[item]
-			return item, v, q, q, a, b, f, q_len
+		q, q_len = self.questions[item]
+		return item, v, q, q, a, b, f, q_len
 
 	def __len__(self):
 		if self.answerable_only:
@@ -230,3 +252,54 @@ def prepare_mul_answers(answers_json):
 	""" This can give more accurate answer selection. """
 	answers = [ans_dict['multiple_choice_answer'] for ans_dict in answers_json['annotations']]
 	return list(map(process_answers, answers)) 
+
+
+class CocoImages(data.Dataset):
+	""" Dataset for MSCOCO images located in a folder on the filesystem """
+	def __init__(self, path, transform=None):
+		super(CocoImages, self).__init__()
+		self.path = path
+		self.id_to_filename = self._find_images()
+		self.sorted_ids = sorted(self.id_to_filename.keys())  # used for deterministic iteration order
+		print('found {} images in {}'.format(len(self), self.path))
+		self.transform = transform
+
+	def _find_images(self):
+		id_to_filename = {}
+		for filename in os.listdir(self.path):
+			if not filename.endswith('.jpg'):
+				continue
+			id_and_extension = filename.split('_')[-1]
+			id = int(id_and_extension.split('.')[0])
+			id_to_filename[id] = filename
+		return id_to_filename
+
+	def __getitem__(self, item):
+		id = self.sorted_ids[item]
+		path = os.path.join(self.path, self.id_to_filename[id])
+		img = Image.open(path).convert('RGB')
+
+		if self.transform is not None:
+			img = self.transform(img)
+		return id, img
+
+	def __len__(self):
+		return len(self.sorted_ids)
+
+
+class Composite(data.Dataset):
+	""" Dataset that is a composite of several Dataset objects. Useful for combining splits of a dataset. """
+	def __init__(self, *datasets):
+		self.datasets = datasets
+
+	def __getitem__(self, item):
+		current = self.datasets[0]
+		for d in self.datasets:
+			if item < len(d):
+				return d[item]
+			item -= len(d)
+		else:
+			raise IndexError('Index too large for composite dataset')
+
+	def __len__(self):
+		return sum(map(len, self.datasets))

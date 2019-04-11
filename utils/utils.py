@@ -1,7 +1,7 @@
 import os
 from nltk.tokenize import TweetTokenizer
 import utils.config as config
-
+import torchvision.transforms as transforms
 
 def batch_accuracy(predicted, true):
 	""" Compute the accuracies for a batch of predictions and answers """
@@ -11,9 +11,9 @@ def batch_accuracy(predicted, true):
 	return (agreeing * 0.3).clamp(max=1)
 
 
-def path_for(train=False, val=False, test=False, question=False, answer=False, fact=False, version=config.version, qa_path=config.qa_path, test_split=config.test_split):
+def path_for(train=False, val=False, test=False, question=False, answer=False, knowledge=False, version=config.version, qa_path=config.qa_path, test_split=config.test_split):
 	assert train + val + test == 1
-	assert question + answer + fact == 1
+	assert question + answer + knowledge == 1
 	
 	if train:
 		split = 'train2014'
@@ -24,8 +24,8 @@ def path_for(train=False, val=False, test=False, question=False, answer=False, f
 
 	if question:
 		fmt = '{0}_{1}_{2}_questions.json'
-	elif fact:
-		fmt = '{1}_{2}_facts.json'
+	elif knowledge:
+		fmt = '{1}_{2}_knowledge.h5'
 	else:
 		if test:
 			# just load validation data in the test=answer=True case, will be ignored anyway
@@ -35,7 +35,7 @@ def path_for(train=False, val=False, test=False, question=False, answer=False, f
 	if version == 'v2':
 		fmt = 'v2_' + fmt
 	s = fmt.format(config.task, config.dataset, split)
-	if not fact:
+	if not knowledge:
 		return os.path.join(qa_path, s)
 	else:
 		return os.path.join(config.fact_path, s)
@@ -112,3 +112,14 @@ class Tracker:
 			else:
 				m = self.momentum
 				self.value = m * self.value + (1 - m) * value
+
+				
+
+def get_transform(target_size, central_fraction=1.0):
+	return transforms.Compose([
+		transforms.Scale(int(target_size / central_fraction)),
+		transforms.CenterCrop(target_size),
+		transforms.ToTensor(),
+		transforms.Normalize(mean=[0.485, 0.456, 0.406],
+							 std=[0.229, 0.224, 0.225]),
+	])

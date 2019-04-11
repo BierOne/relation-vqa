@@ -3,12 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import utils.config as config
-import model.counting as counting
-from model.pretrained_models import Bert
-from model.pretrained_models import Glove
+import model.text_model as text_model
 from torch.nn.utils.rnn import pack_padded_sequence
 
-class Net(nn.Module):
+class RelAtt(nn.Module):
 	def __init__(self, fact_embeddings=None):
 		super(Net, self).__init__()
 		text_features = 2400
@@ -20,13 +18,13 @@ class Net(nn.Module):
 		self.lin = nn.Linear(text_features, vision_features)
 		self.bn  = nn.BatchNorm1d(vision_features)
 		
-		self.ques_text = TextProcessor(
+		self.ques_text = text_model.TextProcessor(
 			embeddings=fact_embeddings,
 			embedding_features=config.text_embed_size,
 			gru_features=text_features,
 			drop=0.5
 		)
-		self.fact_text = FactExtractor(
+		self.fact_text = text_model.FactExtractor(
 			embeddings=fact_embeddings,
 		)
 		self.qv_fusion = Mlb_with_attention(
@@ -48,7 +46,6 @@ class Net(nn.Module):
 			out_features=config.max_answers,
 			drop=0.5,
 		)
-		# self.counter = counting.Counter(objects)
 
 		for m in self.modules():
 			if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
@@ -123,6 +120,7 @@ class Mlb_with_attention(nn.Sequential):
 		
 		return x
 
+
 class Classifier(nn.Sequential):
 	def __init__(self, fv_features, fs_features, mid_features, out_features, drop=0.0):
 		super(Classifier, self).__init__()
@@ -141,48 +139,6 @@ class Classifier(nn.Sequential):
 		x = self.lin2(self.drop(x + y))
 		return x
 
-class TextProcessor(nn.Module):
-	def __init__(self, embeddings, embedding_features, gru_features, drop=0.0):
-		super(TextProcessor, self).__init__()
-		self.drop = nn.Dropout(drop)
-		self.tanh = nn.Tanh()
-		self.gru = nn.GRU(input_size=embedding_features,
-						   hidden_size=gru_features,
-						   num_layers=1,
-						   batch_first=True)
-
-		self._init_gru(self.gru.weight_ih_l0)
-		self._init_gru(self.gru.weight_hh_l0)
-		self.gru.bias_ih_l0.data.zero_()
-		self.gru.bias_hh_l0.data.zero_()
-
-		if config.pretrained_model == 'bert':
-			self.bert = Bert(config.bert_model, config.max_question_len)
-		elif config.pretrained_model == 'glove':
-			self.embedding = Glove(embeddings, fine_tune=False)
-		else:
-			self.embedding = nn.Embedding(
-				embeddings, embedding_features) # , padding_idx=0)
-			nn.init.xavier_uniform_(self.embedding.weight)
-
-	def _init_gru(self, weight):
-		for w in weight.chunk(3, 0):
-			nn.init.xavier_uniform_(w)
-
-	def forward(self, q, q_len):
-		if config.pretrained_model == 'bert':
-			tanhed = self.bert.forward(q[0], q[1])
-		else:
-			embedded = self.embedding(q)
-			tanhed = self.tanh(self.drop(embedded))
-		packed = pack_padded_sequence(tanhed, q_len, batch_first=True)
-		_, h = self.gru(packed)
-		return h.squeeze(0)
-
-class FactExtractor(nn.Sequential):
-	def __init__(self, embeddings):
-		super(FactExtractor, self).__init__()
-		self.add_module('embedding',  Glove(embeddings, fine_tune=False))
 
 class Attention(nn.Module):
 	def __init__(self, v_features, q_features, mid_features, glimpses, drop=0.0):
